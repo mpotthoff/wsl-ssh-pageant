@@ -17,6 +17,8 @@ import (
 	"unsafe"
 
 	"github.com/Microsoft/go-winio"
+	"github.com/apenwarr/fixconsole"
+	"github.com/getlantern/systray"
 	"github.com/lxn/win"
 	"golang.org/x/sys/windows"
 )
@@ -184,12 +186,11 @@ func listenLoop(ln net.Listener) {
 }
 
 func main() {
+	fixconsole.FixConsoleIfNeeded()
 	flag.Parse()
 
 	var unix, pipe net.Listener
 	var err error
-
-	done := make(chan bool, 1)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
@@ -198,13 +199,12 @@ func main() {
 		switch sig {
 		case os.Interrupt:
 			log.Printf("Caught signal")
-			done <- true
+			systray.Quit()
 		}
 	}()
 
 	if *unixSocket != "" {
 		unix, err = net.Listen("unix", *unixSocket)
-
 		if err != nil {
 			log.Fatalf("Could not open socket %s, error '%s'\n", *unixSocket, err)
 		}
@@ -213,8 +213,9 @@ func main() {
 		log.Printf("Listening on Unix socket: %s\n", *unixSocket)
 		go func() {
 			listenLoop(unix)
+
 			// If for some reason our listener breaks, kill the program
-			done <- true
+			systray.Quit()
 		}()
 	}
 
@@ -222,7 +223,6 @@ func main() {
 		namedPipeFullName := "\\\\.\\pipe\\" + *namedPipe
 		var cfg = &winio.PipeConfig{}
 		pipe, err = winio.ListenPipe(namedPipeFullName, cfg)
-
 		if err != nil {
 			log.Fatalf("Could not open named pipe %s, error '%s'\n", namedPipeFullName, err)
 		}
@@ -231,8 +231,9 @@ func main() {
 		log.Printf("Listening on named pipe: %s\n", namedPipeFullName)
 		go func() {
 			listenLoop(pipe)
+
 			// If for some reason our listener breaks, kill the program
-			done <- true
+			systray.Quit()
 		}()
 	}
 
@@ -241,8 +242,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wait until we are signalled as finished
-	<-done
+	systray.Run(onReady, onExit)
+}
 
-	log.Printf("Exiting...")
+func onReady() {
+	systray.SetTitle("WSL-SSH-Pageant")
+	systray.SetTooltip("WSL-SSH-Pageant")
+	systray.SetIcon(icon)
+
+	quit := systray.AddMenuItem("Quit", "Quits this app")
+
+	go func() {
+		for {
+			select {
+			case <-quit.ClickedCh:
+				systray.Quit()
+				return
+			}
+		}
+	}()
+}
+
+func onExit() {
+	log.Print("Exiting...")
 }
